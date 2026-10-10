@@ -4,7 +4,11 @@
 //! Components combine with Add (max), Subtract (a·(1−c)) and Intersect (a·c).
 //!
 //! AI shapes (Sky, Subject, Background, People) use the segmentation [`Mattes`] the source carries
-//! (DNG semantic masks, e.g. iPhone ProRAW's) when it has a matching one, else a heuristic.
+//! (DNG semantic masks, e.g. iPhone ProRAW's) when it has a matching one; Subject, Background and
+//! whole People otherwise use the subject the render estimated ([`crate::subject`], added to the
+//! mattes as [`MatteKind::Subject`]); without either, a heuristic.
+
+use std::sync::Arc;
 
 use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskOp, MaskShape, SegMask};
 use lightcraft_geom::{Orientation, Point};
@@ -23,6 +27,9 @@ pub enum MatteKind {
     Hair,
     Teeth,
     Glasses,
+    /// The main subject as [`crate::subject`] estimates it (not from the file): used only when no
+    /// person matte fits, and its edges are snapped to the photo when rendered.
+    Subject,
 }
 
 /// Segmentation mattes that came with the source: 0..255 alpha planes, each covering the whole
@@ -30,7 +37,7 @@ pub enum MatteKind {
 /// person) are combined with max.
 #[derive(Clone, Default, PartialEq)]
 pub struct Mattes {
-    mattes: Vec<(MatteKind, Image<u8>)>,
+    mattes: Vec<(MatteKind, Arc<Image<u8>>)>,
 }
 
 impl std::fmt::Debug for Mattes {
@@ -42,9 +49,20 @@ impl std::fmt::Debug for Mattes {
 impl Mattes {
     /// Add a matte (empty ones are ignored).
     pub fn push(&mut self, kind: MatteKind, matte: Image<u8>) {
+        self.push_shared(kind, Arc::new(matte));
+    }
+
+    /// [`Mattes::push`] for a shared matte.
+    pub fn push_shared(&mut self, kind: MatteKind, matte: Arc<Image<u8>>) {
         if matte.width > 0 && matte.height > 0 && matte.data.len() == matte.width * matte.height {
             self.mattes.push((kind, matte));
         }
+    }
+
+    /// Whether a whole-person matte (or person parts) came with the source.
+    pub fn has_person(&self) -> bool {
+        use MatteKind::*;
+        !self.of(&[Person, Skin, Hair, Teeth, Glasses]).is_empty()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -57,11 +75,27 @@ impl Mattes {
     }
 
     fn of(&self, kinds: &[MatteKind]) -> Vec<&Image<u8>> {
-        self.mattes.iter().filter(|(k, _)| kinds.contains(k)).map(|(_, m)| m).collect()
+        self.mattes.iter().filter(|(k, _)| kinds.contains(k)).map(|(_, m)| &**m).collect()
     }
 
-    /// The mattes a shape uses instead of its heuristic (empty: none fits).
-    fn for_shape(&self, shape: &MaskShape) -> Vec<&Image<u8>> {
+    /// The mattes a shape uses instead of its heuristic (empty: none fits), and whether they are
+    /// the estimated subject.
+    fn for_shape(&self, shape: &MaskShape) -> (Vec<&Image<u8>>, bool) {
+        use MatteKind::*;
+        let found = self.source_mattes(shape);
+        let wants_subject = match shape {
+            MaskShape::Subject => true,
+            MaskShape::People { parts, .. } => parts.is_empty() || parts.iter().any(|p| is_whole_person(p)),
+            _ => false,
+        };
+        if found.is_empty() && wants_subject {
+            return (self.of(&[Subject]), true);
+        }
+        (found, false)
+    }
+
+    /// The mattes from the source a shape uses (empty: none fits).
+    fn source_mattes(&self, shape: &MaskShape) -> Vec<&Image<u8>> {
         use MatteKind::*;
         // the whole person: a person matte, else the union of the parts
         let person = || {
@@ -82,14 +116,17 @@ impl Mattes {
                             .map(|(_, k)| k)
                     })
                     .collect();
-                let whole =
-                    parts.is_empty() || parts.iter().any(|p| matches!(p.to_ascii_lowercase().as_str(), "person" | "entire person" | "entireperson"));
+                let whole = parts.is_empty() || parts.iter().any(|p| is_whole_person(p));
                 // parts without a matte (lips, clothes, …) keep the heuristic
                 if whole { person() } else { self.of(&wanted) }
             }
             _ => Vec::new(),
         }
     }
+}
+
+fn is_whole_person(part: &str) -> bool {
+    matches!(part.to_ascii_lowercase().as_str(), "person" | "entire person" | "entireperson")
 }
 
 pub struct Evaluated {
@@ -175,9 +212,10 @@ fn for_each_pos(frame: &Frame, w: usize, h: usize, out: &mut Plane, f: impl Fn(P
 /// The alpha plane of one component shape. AI shapes use the source's matching `mattes`, if any.
 #[allow(clippy::too_many_arguments)]
 pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Plane {
-    let fitting = mattes.map(|m| m.for_shape(shape)).unwrap_or_default();
+    let (fitting, estimated) = mattes.map(|m| m.for_shape(shape)).unwrap_or_default();
     if !fitting.is_empty() {
-        return matte_alpha(&fitting, frame, w, h);
+        let a = matte_alpha(&fitting, frame, w, h);
+        return if estimated { snap_to_photo(&a, log_l, frame, w) } else { a };
     }
     let mut out = Plane::new(w, h);
     let to_long = |p: Point| frame.norm_to_long(p);
@@ -257,7 +295,8 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
         MaskShape::Object { hint, .. } if hint.is_empty() => {}
         MaskShape::Prompt { .. } => {}
         MaskShape::Subject | MaskShape::Object { .. } | MaskShape::People { .. } => {
-            // Saliency heuristic: centre-weighted local contrast (replaced by the segmenter in M12).
+            // Last resort (a caller that passes no estimated subject, see `crate::subject`):
+            // centre-weighted local contrast.
             let m = frame.out_to_norm(w, h);
             let blur = lightcraft_raster::blur::gaussian(log_l, 0.03 * frame_px(frame, w));
             for (i, v) in out.data.iter_mut().enumerate() {
@@ -332,6 +371,19 @@ fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Fram
             *v = 1.0 / (1.0 + (-l * gain).exp());
         }
     });
+}
+
+/// The estimated subject (a coarse matte, [`crate::subject::EDGE`] px over the whole photo)
+/// with its edges following the photo's at output resolution: a guided filter on log luminance
+/// over ~0.6 % of the long edge (the matte's pixel size), then the transition tightened again.
+fn snap_to_photo(a: &Plane, log_l: &Plane, frame: &Frame, w: usize) -> Plane {
+    if log_l.width != a.width || log_l.height != a.height {
+        return a.clone();
+    }
+    let sigma = (0.006 * frame_px(frame, w)).max(1.0);
+    let mut q = guided_cross(log_l, a, sigma, 0.01);
+    q.data.iter_mut().for_each(|v| *v = smooth(0.2, 0.8, *v));
+    q
 }
 
 fn frame_px(frame: &Frame, w: usize) -> f32 {

@@ -38,6 +38,7 @@ pub mod output;
 pub mod profiles;
 pub mod redeye;
 pub mod spots;
+pub mod subject;
 pub mod tone;
 pub mod transform;
 pub mod upright;
@@ -430,7 +431,27 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         src_long,
     ));
-    Plan { settings, frame, w, h, px_per_long, src_long, geo, lin_key, eyes, fixed_air, keep, mattes: info.mattes.clone() }
+    let mattes = mattes_for(src, info, s);
+    Plan { settings, frame, w, h, px_per_long, src_long, geo, lin_key, eyes, fixed_air, keep, mattes }
+}
+
+/// The source's segmentation mattes plus, when a mask selects the subject (Subject, Background,
+/// People), the source has no person matte and the photo is on process V2 or later, the subject
+/// estimated from the photo ([`subject::matte`]: once per photo, cached). V1 keeps its heuristic
+/// (`docs/process-versions.md`).
+fn mattes_for(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> Option<Arc<masks::Mattes>> {
+    use lightcraft_develop::{MaskShape, Process};
+    if s.process.process() < Process::V2 {
+        return info.mattes.clone();
+    }
+    let needs =
+        s.masks.iter().flat_map(|m| &m.components).any(|c| matches!(c.shape, MaskShape::Subject | MaskShape::Background | MaskShape::People { .. }));
+    if !needs || info.mattes.as_ref().is_some_and(|m| m.has_person()) {
+        return info.mattes.clone();
+    }
+    let mut m = info.mattes.as_deref().cloned().unwrap_or_default();
+    m.push_shared(masks::MatteKind::Subject, subject::matte(src));
+    Some(Arc::new(m))
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).

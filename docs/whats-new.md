@@ -2,6 +2,18 @@
 
 ## October 2026
 
+### Subject and Background masks find the subject
+- Select Subject (and Background, its inverse) now detects the main subject instead of selecting a soft
+  blob in the middle of the photo: what stands apart from the photo's borders in colour and brightness, with the
+  in-focus part of a shallow-depth-of-field shot preferred, refined by the subject's colours and with edges that follow
+  the photo. A subject that fills the frame or touches its edges still counts; a photo where nothing stands out (an
+  open seascape) selects little or nothing rather than an arbitrary region.
+- It needs no model or download and works offline, in the browser too. The subject is found once per photo over the
+  whole uncropped image, so cropping, zooming in and exporting keep the same selection.
+- Refine it as before: add or subtract a brush, gradient or range, or raise Refine Edges.
+- New photos get it through rendering process V2. Photos you already edited keep their old Subject selection
+  until you run Update to Current Process (or Reset), so no existing edit changes by itself.
+
 ### Smart album rules
 - The rule editor's field menu is grouped: Rating, Pick Flag, Color Label and Any Searchable Text at the top, then
   submenus for Source, File, Date, Keywords & People, Description, Camera Info, Location, Size, Develop and Assisted
