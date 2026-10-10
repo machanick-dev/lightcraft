@@ -601,6 +601,22 @@ mod tests {
         }
     }
 
+    /// Process V1 is frozen: its Subject masks keep the heuristic; V2 gets the estimate.
+    #[test]
+    fn only_process_v2_estimates_the_subject() {
+        use lightcraft_develop::{DevelopSettings, Mask, MaskComponent, MaskOp, MaskShape, ProcessVersion};
+        let src = scene(240, 160, 0.42, 0.5, 0.14);
+        let mut s = DevelopSettings::default();
+        let comp = MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Subject };
+        s.masks.push(Mask { id: 1, components: vec![comp], ..Default::default() });
+        let req = crate::RenderRequest::fit(240, 160);
+        let info = crate::SourceInfo::default();
+        let v2 = DevelopSettings { process: ProcessVersion(2), ..s.clone() };
+        assert!(crate::plan(&src, &info, &v2, &req).mattes.is_some_and(|m| !m.is_empty()));
+        let v1 = DevelopSettings { process: ProcessVersion::V1, ..s };
+        assert!(crate::plan(&src, &info, &v1, &req).mattes.is_none());
+    }
+
     #[test]
     fn the_matte_does_not_depend_on_the_source_resolution() {
         let (a, b) = (matte(&scene(1536, 1024, 0.6, 0.45, 0.12)), matte(&scene(768, 512, 0.6, 0.45, 0.12)));

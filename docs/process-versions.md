@@ -5,7 +5,16 @@ Every photo's develop settings record the **rendering process** they are interpr
 this the process version. It lets the look of LightCraft improve (a new default tone curve, issue #146;
 stronger Light sliders, issue #196) without changing a single photo someone has already edited.
 
-Today there is one process, **V1**: LightCraft's rendering from before process versions existed.
+Today there are two:
+
+| Process | What it is |
+|---|---|
+| **V1** | LightCraft's rendering from before process versions existed. Frozen. |
+| **V2** | V1 plus classical subject detection (`crates/pipeline/src/subject.rs`): Subject, Background and whole-person People masks select the subject found in the photo instead of V1's centre-weighted blob. Everything else renders exactly as V1 (`base_tone` shares V1's arm). The latest. |
+
+V2 branches in one place, `mattes_for` in `crates/pipeline/src/lib.rs`: only V2 adds the estimated
+subject to the plan's mattes, so V1 photos with Subject masks keep the selection they were edited with
+until Update to Current Process.
 
 ## The rule
 

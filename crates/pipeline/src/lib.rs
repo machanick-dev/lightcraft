@@ -436,10 +436,14 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
 }
 
 /// The source's segmentation mattes plus, when a mask selects the subject (Subject, Background,
-/// People) and the source has no person matte, the subject estimated from the photo
-/// ([`subject::matte`]: once per photo, cached).
+/// People), the source has no person matte and the photo is on process V2 or later, the subject
+/// estimated from the photo ([`subject::matte`]: once per photo, cached). V1 keeps its heuristic
+/// (`docs/process-versions.md`).
 fn mattes_for(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> Option<Arc<masks::Mattes>> {
-    use lightcraft_develop::MaskShape;
+    use lightcraft_develop::{MaskShape, Process};
+    if s.process.process() < Process::V2 {
+        return info.mattes.clone();
+    }
     let needs =
         s.masks.iter().flat_map(|m| &m.components).any(|c| matches!(c.shape, MaskShape::Subject | MaskShape::Background | MaskShape::People { .. }));
     if !needs || info.mattes.as_ref().is_some_and(|m| m.has_person()) {

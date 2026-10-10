@@ -11,6 +11,8 @@
 - It needs no model or download and works offline, in the browser too. The subject is found once per photo over the
   whole uncropped image, so cropping, zooming in and exporting keep the same selection.
 - Refine it as before: add or subtract a brush, gradient or range, or raise Refine Edges.
+- New photos get it through rendering process V2. Photos you already edited keep their old Subject selection
+  until you run Update to Current Process (or Reset), so no existing edit changes by itself.
 
 ### Smart album rules
 - The rule editor's field menu is grouped: Rating, Pick Flag, Color Label and Any Searchable Text at the top, then
